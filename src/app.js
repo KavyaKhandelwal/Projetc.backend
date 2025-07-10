@@ -7,13 +7,11 @@ const cookieParser = require('cookie-parser');
 const connectDB = require('./config/database');
 const config = require('./config/env');
 
-// Import routes
 const noteRoutes = require('./routes/noteRoutes');
 const authRoutes = require('./routes/authRoutes');
 const eventRoutes = require('./routes/eventRoutes');
 const registrationRoutes = require('./routes/registrationRoutes');
-const adminRoutes = require('./routes/adminRoutes');
-
+// const adminRoutes = require('./routes/adminRoutes');
 // Initialize express app
 const app = express();
 
@@ -56,12 +54,12 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API routes
+// // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/registrations', registrationRoutes);
 app.use('/api/notes', noteRoutes);
-app.use('/api/admin', adminRoutes);
+// app.use('/api/admin', adminRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -104,4 +102,4 @@ app.use((err, req, res, next) => {
   });
 });
 
-module.exports = app; 
+module.exports = app;

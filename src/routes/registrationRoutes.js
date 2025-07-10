@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate } = require('../middlewares/auth');
+const { protect } = require('../middlewares/auth');
 const { 
   validateRegistration,
   validateCancellation,
@@ -36,28 +36,28 @@ const {
 
 // Protected routes - User registration management
 router.post('/',
-  authenticate,
+  protect,
   validateRegistration,
   handleValidationErrors,
   registerForEvent
 );
 
 router.get('/my-registrations',
-  authenticate,
+  protect,
   validateRegistrationSearch,
   handleValidationErrors,
   getMyRegistrations
 );
 
 router.get('/:id',
-  authenticate,
+  protect,
   validateRegistrationId,
   handleValidationErrors,
   getRegistrationById
 );
 
 router.patch('/:id/cancel',
-  authenticate,
+  protect,
   validateRegistrationId,
   validateCancellation,
   handleValidationErrors,
@@ -65,7 +65,7 @@ router.patch('/:id/cancel',
 );
 
 router.put('/:id',
-  authenticate,
+  protect,
   validateRegistrationId,
   validateRegistrationUpdate,
   handleValidationErrors,
@@ -74,7 +74,7 @@ router.put('/:id',
 
 // Organizer/Admin routes - Event registration management
 router.get('/event/:eventId',
-  authenticate,
+  protect,
   validateEventId,
   validateRegistrationSearch,
   handleValidationErrors,
@@ -82,7 +82,7 @@ router.get('/event/:eventId',
 );
 
 router.patch('/:id/check-in',
-  authenticate,
+  protect,
   validateRegistrationId,
   validateCheckIn,
   handleValidationErrors,
@@ -90,7 +90,7 @@ router.patch('/:id/check-in',
 );
 
 router.patch('/:id/refund',
-  authenticate,
+  protect,
   validateRegistrationId,
   validateRefund,
   handleValidationErrors,
@@ -98,14 +98,14 @@ router.patch('/:id/refund',
 );
 
 router.post('/bulk',
-  authenticate,
+  protect,
   validateBulkOperation,
   handleValidationErrors,
   bulkOperations
 );
 
 router.get('/event/:eventId/export',
-  authenticate,
+  protect,
   validateEventId,
   handleValidationErrors,
   exportRegistrations
