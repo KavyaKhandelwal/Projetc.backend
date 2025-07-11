@@ -1,19 +1,22 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const config = require('../../config/config');
+const { isValidEmail } = require('../utils/helpers');
 
 const userSchema = new mongoose.Schema({
+  // Basic Information
   firstName: {
     type: String,
     required: [true, 'First name is required'],
     trim: true,
-    maxlength: [50, 'First name cannot be more than 50 characters']
+    maxlength: [50, 'First name cannot exceed 50 characters']
   },
   lastName: {
     type: String,
     required: [true, 'Last name is required'],
     trim: true,
-    maxlength: [50, 'Last name cannot be more than 50 characters']
+    maxlength: [50, 'Last name cannot exceed 50 characters']
   },
   email: {
     type: String,
@@ -21,24 +24,30 @@ const userSchema = new mongoose.Schema({
     unique: true,
     lowercase: true,
     trim: true,
-    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
+    validate: {
+      validator: isValidEmail,
+      message: 'Please provide a valid email address'
+    }
   },
   password: {
     type: String,
     required: [true, 'Password is required'],
-    minlength: [6, 'Password must be at least 6 characters'],
+    minlength: [8, 'Password must be at least 8 characters long'],
     select: false // Don't include password in queries by default
   },
-  phone: {
+
+  // Profile Information
+  avatar: {
     type: String,
-    trim: true,
-    match: [/^[\+]?[1-9][\d]{0,15}$/, 'Please enter a valid phone number']
+    default: null
   },
-  role: {
+  bio: {
     type: String,
-    enum: ['user', 'organizer', 'admin'],
-    default: 'user'
+    maxlength: [500, 'Bio cannot exceed 500 characters'],
+    default: ''
   },
+
+  // Account Status
   isEmailVerified: {
     type: Boolean,
     default: false
@@ -47,114 +56,193 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  profilePicture: {
+  role: {
     type: String,
+    enum: ['user', 'admin'],
+    default: 'user'
+  },
+
+  // Preferences
+  preferences: {
+    theme: {
+      type: String,
+      enum: ['light', 'dark', 'auto'],
+      default: 'light'
+    },
+    defaultCategory: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Category',
+      default: null
+    },
+    notificationsEnabled: {
+      type: Boolean,
+      default: true
+    },
+    language: {
+      type: String,
+      default: 'en'
+    }
+  },
+
+  // Security
+  emailVerificationToken: {
+    type: String,
+    select: false
+  },
+  emailVerificationExpires: {
+    type: Date,
+    select: false
+  },
+  passwordResetToken: {
+    type: String,
+    select: false
+  },
+  passwordResetExpires: {
+    type: Date,
+    select: false
+  },
+  refreshTokens: [{
+    token: {
+      type: String,
+      required: true
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+      expires: 604800 // 7 days in seconds
+    }
+  }],
+
+  // Activity Tracking
+  lastLoginAt: {
+    type: Date,
     default: null
   },
-  bio: {
-    type: String,
-    maxlength: [500, 'Bio cannot be more than 500 characters']
-  },
-  dateOfBirth: {
-    type: Date
-  },
-  address: {
-    street: String,
-    city: String,
-    state: String,
-    zipCode: String,
-    country: String
-  },
-  preferences: {
-    notifications: {
-      email: { type: Boolean, default: true },
-      sms: { type: Boolean, default: false },
-      push: { type: Boolean, default: true }
-    },
-    categories: [{
-      type: String,
-      enum: ['music', 'sports', 'business', 'technology', 'arts', 'food', 'other']
-    }]
-  },
-  resetPasswordToken: String,
-  resetPasswordExpire: Date,
-  emailVerificationToken: String,
-  emailVerificationExpire: Date
+  loginCount: {
+    type: Number,
+    default: 0
+  }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
-
-// Index for better search performance
-userSchema.index({ role: 1 });
 
 // Virtual for full name
 userSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
 });
 
-// Virtual for age
-userSchema.virtual('age').get(function() {
-  if (!this.dateOfBirth) return null;
-  const today = new Date();
-  const birthDate = new Date(this.dateOfBirth);
-  let age = today.getFullYear() - birthDate.getFullYear();
-  const monthDiff = today.getMonth() - birthDate.getMonth();
-  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-    age--;
-  }
-  return age;
+// Virtual for notes count
+userSchema.virtual('notesCount', {
+  ref: 'Note',
+  localField: '_id',
+  foreignField: 'author',
+  count: true
 });
 
-// Ensure virtual fields are serialized
-userSchema.set('toJSON', { virtuals: true });
+// Indexes
+userSchema.index({ email: 1 });
+userSchema.index({ createdAt: -1 });
+userSchema.index({ isActive: 1 });
 
-// Hash password before saving
+// Pre-save middleware to hash password
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) {
+  // Only hash the password if it has been modified (or is new)
+  if (!this.isModified('password')) return next();
+
+  try {
+    // Hash password with cost of 12
+    const hashedPassword = await bcrypt.hash(this.password, config.bcrypt.saltRounds);
+    this.password = hashedPassword;
     next();
+  } catch (error) {
+    next(error);
   }
-  
-  const salt = await bcrypt.genSalt(12);
-  this.password = await bcrypt.hash(this.password, salt);
 });
 
-// Compare password method
-userSchema.methods.comparePassword = async function(enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
+// Instance method to check password
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Generate password reset token
-userSchema.methods.getResetPasswordToken = function() {
-  // Generate token
-  const resetToken = crypto.randomBytes(20).toString('hex');
+// Instance method to generate JWT token
+userSchema.methods.generateAuthToken = function() {
+  const payload = {
+    id: this._id,
+    email: this.email,
+    role: this.role
+  };
+
+  return jwt.sign(payload, config.jwt.secret, {
+    expiresIn: config.jwt.expiresIn
+  });
+};
+
+// Instance method to generate refresh token
+userSchema.methods.generateRefreshToken = function() {
+  const payload = {
+    id: this._id,
+    type: 'refresh'
+  };
+
+  return jwt.sign(payload, config.jwt.refreshSecret, {
+    expiresIn: config.jwt.refreshExpiresIn
+  });
+};
+
+// Instance method to add refresh token
+userSchema.methods.addRefreshToken = async function(token) {
+  this.refreshTokens.push({ token });
+  await this.save();
+};
+
+// Instance method to remove refresh token
+userSchema.methods.removeRefreshToken = async function(token) {
+  this.refreshTokens = this.refreshTokens.filter(
+    refreshToken => refreshToken.token !== token
+  );
+  await this.save();
+};
+
+// Instance method to generate password reset token
+userSchema.methods.generatePasswordResetToken = function() {
+  const crypto = require('crypto');
+  const resetToken = crypto.randomBytes(32).toString('hex');
   
-  // Hash token and set to resetPasswordToken field
-  this.resetPasswordToken = crypto
+  this.passwordResetToken = crypto
     .createHash('sha256')
     .update(resetToken)
     .digest('hex');
   
-  // Set expire
-  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
   
   return resetToken;
 };
 
-// Generate email verification token
-userSchema.methods.getEmailVerificationToken = function() {
-  // Generate token
-  const verificationToken = crypto.randomBytes(20).toString('hex');
+// Instance method to generate email verification token
+userSchema.methods.generateEmailVerificationToken = function() {
+  const crypto = require('crypto');
+  const verificationToken = crypto.randomBytes(32).toString('hex');
   
-  // Hash token and set to emailVerificationToken field
   this.emailVerificationToken = crypto
     .createHash('sha256')
     .update(verificationToken)
     .digest('hex');
   
-  // Set expire
-  this.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
   
   return verificationToken;
 };
 
-module.exports = mongoose.model('User', userSchema); 
+// Static method to find user by email
+userSchema.statics.findByEmail = function(email) {
+  return this.findOne({ email: email.toLowerCase() });
+};
+
+// Static method to find active users
+userSchema.statics.findActiveUsers = function() {
+  return this.find({ isActive: true });
+};
+
+module.exports = mongoose.model('User', userSchema);

@@ -1,105 +1,192 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const compression = require('compression');
 const morgan = require('morgan');
-const cookieParser = require('cookie-parser');
-const connectDB = require('./config/database');
-const config = require('./config/env');
 
-const noteRoutes = require('./routes/noteRoutes');
-const authRoutes = require('./routes/authRoutes');
-const eventRoutes = require('./routes/eventRoutes');
-const registrationRoutes = require('./routes/registrationRoutes');
-// const adminRoutes = require('./routes/adminRoutes');
-// Initialize express app
+// Import utilities and middleware
+const database = require('./utils/database');
+const logger = require('./utils/logger');
+const config = require('../config/config');
+
+const {
+  errorHandler,
+  notFound,
+  handleUnhandledRejection,
+  handleUncaughtException,
+  handleGracefulShutdown
+} = require('./middleware/errorHandler');
+
+const { generalLimiter } = require('./middleware/rateLimiter');
+
+// Import routes
+const authRoutes = require('./routes/auth');
+const noteRoutes = require('./routes/notes');
+const categoryRoutes = require('./routes/categories');
+const tagRoutes = require('./routes/tags');
+const shareRoutes = require('./routes/share');
+
+// Handle uncaught exceptions and unhandled rejections
+handleUncaughtException();
+handleUnhandledRejection();
+
+// Create Express app
 const app = express();
 
-// Connect to MongoDB
-connectDB();
+// Trust proxy (for rate limiting and logging)
+app.set('trust proxy', 1);
 
 // Security middleware
-app.use(helmet());
-
-// CORS middleware
-app.use(cors({
-  origin: config.CORS_ORIGIN,
-  credentials: true
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  crossOriginEmbedderPolicy: false
 }));
+
+// CORS configuration
+app.use(cors({
+  origin: config.cors.origin,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+// Compression middleware
+app.use(compression());
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Cookie parser middleware
-app.use(cookieParser());
-
-// Logging middleware
-if (config.NODE_ENV === 'development') {
+// HTTP request logging
+if (config.nodeEnv === 'development') {
   app.use(morgan('dev'));
 } else {
-  app.use(morgan('combined'));
+  app.use(morgan('combined', { stream: logger.stream }));
 }
 
-// Static files
-app.use('/public', express.static('public'));
+// Rate limiting
+app.use(generalLimiter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'Server is running',
+    message: 'Server is healthy',
     timestamp: new Date().toISOString(),
-    environment: config.NODE_ENV
+    uptime: process.uptime(),
+    environment: config.nodeEnv,
+    version: process.env.npm_package_version || '1.0.0'
   });
 });
 
-// // API routes
+// API routes
 app.use('/api/auth', authRoutes);
-app.use('/api/events', eventRoutes);
-app.use('/api/registrations', registrationRoutes);
 app.use('/api/notes', noteRoutes);
-// app.use('/api/admin', adminRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/tags', tagRoutes);
+app.use('/api/shared', shareRoutes);
 
-// Root endpoint
-app.get('/', (req, res) => {
+// API documentation endpoint
+app.get('/api', (req, res) => {
   res.json({
     success: true,
-    message: 'Event Promotion API is running',
+    message: 'Notes App API',
     version: '1.0.0',
+    documentation: {
+      authentication: '/api/auth',
+      notes: '/api/notes',
+      categories: '/api/categories',
+      tags: '/api/tags',
+      sharing: '/api/shared'
+    },
     endpoints: {
       health: '/health',
-      auth: '/api/auth',
-      events: '/api/events',
-      registrations: '/api/registrations',
-      notes: '/api/notes'
-    },
-    features: {
-      authentication: 'User registration, login, and profile management',
-      events: 'Event creation, management, and discovery',
-      registrations: 'Event registration and attendee management',
-      notes: 'Personal note management'
+      auth: {
+        register: 'POST /api/auth/register',
+        login: 'POST /api/auth/login',
+        logout: 'POST /api/auth/logout',
+        refreshToken: 'POST /api/auth/refresh-token',
+        profile: 'GET /api/auth/me',
+        updateProfile: 'PUT /api/auth/profile',
+        changePassword: 'PUT /api/auth/change-password',
+        forgotPassword: 'POST /api/auth/forgot-password',
+        resetPassword: 'POST /api/auth/reset-password'
+      },
+      notes: {
+        list: 'GET /api/notes',
+        create: 'POST /api/notes',
+        get: 'GET /api/notes/:id',
+        update: 'PUT /api/notes/:id',
+        delete: 'DELETE /api/notes/:id',
+        stats: 'GET /api/notes/stats',
+        shared: 'GET /api/notes/shared',
+        collaborated: 'GET /api/notes/collaborated'
+      },
+      categories: {
+        list: 'GET /api/categories',
+        create: 'POST /api/categories',
+        get: 'GET /api/categories/:id',
+        update: 'PUT /api/categories/:id',
+        delete: 'DELETE /api/categories/:id',
+        hierarchy: 'GET /api/categories/hierarchy',
+        stats: 'GET /api/categories/stats'
+      },
+      tags: {
+        list: 'GET /api/tags',
+        create: 'POST /api/tags',
+        get: 'GET /api/tags/:id',
+        update: 'PUT /api/tags/:id',
+        delete: 'DELETE /api/tags/:id',
+        popular: 'GET /api/tags/popular',
+        search: 'GET /api/tags/search',
+        stats: 'GET /api/tags/stats'
+      },
+      sharing: {
+        getShared: 'GET /api/shared/:shareId'
+      }
     }
   });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route ${req.originalUrl} not found`
-  });
-});
+// 404 handler for undefined routes
+app.use(notFound);
 
 // Global error handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Something went wrong!',
-    ...(config.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
+app.use(errorHandler);
 
-module.exports = app;
+// Start server function
+const startServer = async () => {
+  try {
+    // Connect to database
+    await database.connect();
+    
+    // Start server
+    const server = app.listen(config.port, () => {
+      logger.info(`Server running in ${config.nodeEnv} mode on port ${config.port}`);
+      logger.info(`Health check available at http://localhost:${config.port}/health`);
+      logger.info(`API documentation available at http://localhost:${config.port}/api`);
+    });
+
+    // Handle graceful shutdown
+    handleGracefulShutdown(server);
+
+    return server;
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+// Start server if this file is run directly
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };
