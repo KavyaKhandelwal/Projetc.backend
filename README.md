@@ -83,7 +83,7 @@ A comprehensive, full-featured notes application backend built with Express.js a
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/KavyaKhandelwal/Projetc.backend
    cd notes-app-backend
    ```
 
